@@ -1,0 +1,12 @@
+{
+  "display_name": "橄榄百宝箱",
+  "loading_order": 9,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "",
+  "author": "橄榄",
+  "version": "1.0.0",
+  "homePage": "https://github.com/Liu-fucheng/Toolkit",
+  "auto_update": true
+}
