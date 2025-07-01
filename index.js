@@ -109,9 +109,6 @@ function onPluginEnableSwitch(event) {
 }
 
 jQuery(async () => {
-    const settingsHtml = await $.get(`${extensionFolderPath}/index.html`);
-    $("#extensions_settings").append(settingsHtml);
-
     $("#plugin_enable_switch").on("input", onPluginEnableSwitch);
     $("#my_button").on("click", onButtonClick);
     $("#example_setting").on("input", onExampleInput);
