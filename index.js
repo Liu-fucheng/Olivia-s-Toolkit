@@ -37,7 +37,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
             const text = await response.text();
             toastr.error(text || response.statusText, "扩展更新失败", { timeOut: 5000 });
             console.error('Extension update failed', response.status, response.statusText, text);
-            return;
+            return false;
         }
 
         const data = await response.json();
@@ -46,12 +46,15 @@ async function updateExtension(extensionName, quiet, timeout = null) {
             if (!quiet) {
                 toastr.success('扩展已是最新版本');
             }
+            return false; // 没有更新
         } else {
-            toastr.success(`扩展 ${extensionName} 已更新到 ${data.shortCommitHash}`, "请刷新页面以应用更新");
+            toastr.success(`扩展 ${extensionName} 已更新到 ${data.shortCommitHash}`, "更新成功，即将刷新页面");
+            return true; // 有更新
         }
     } catch (error) {
         console.error('Extension update error:', error);
         toastr.error('更新失败: ' + error.message, "扩展更新错误");
+        return false;
     }
 }
 
@@ -65,8 +68,8 @@ const GITHUB_REPO = "Liu-fucheng/Olivia-s-Toolkit";
 const GITHUB_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/main/manifest.json`;
 
 // 版本信息
-let localVersion = "未知";
-let remoteVersion = "未知";
+let localVersion = "";
+let remoteVersion = "";
 let hasUpdate = false;
 
 window.extension_settings = window.extension_settings || {};
@@ -137,14 +140,15 @@ async function loadLocalVersion() {
         const response = await fetch(`/${extensionFolderPath}/manifest.json`);
         if (response.ok) {
             const manifest = await response.json();
-            localVersion = manifest.version || "未知";
-            console.log(`橄榄百宝箱本地版本: ${localVersion}`);
-            updateVersionDisplay(); // 立即更新显示
+            localVersion = manifest.version || "";
+            if (localVersion) {
+                console.log(`橄榄百宝箱本地版本: ${localVersion}`);
+                updateVersionDisplay(); // 只有获取到版本才更新显示
+            }
         }
     } catch (error) {
         console.error('无法读取本地manifest.json:', error);
-        localVersion = "未知";
-        updateVersionDisplay(); // 即使失败也更新显示
+        localVersion = "";
     }
 }
 
@@ -167,8 +171,7 @@ async function loadRemoteVersion() {
 
 // 比较版本
 function checkForUpdates() {
-    if (localVersion !== "未知" && remoteVersion !== "未知" && 
-        localVersion !== "读取失败" && remoteVersion !== "获取失败") {
+    if (localVersion && remoteVersion) {
         hasUpdate = localVersion !== remoteVersion;
         console.log(`版本对比: 本地${localVersion} vs 远程${remoteVersion} => ${hasUpdate ? '有更新' : '无更新'}`);
     }
@@ -181,8 +184,8 @@ function updateVersionDisplay() {
     const updateBadgeElement = $("#update-badge");
     const updateButton = $("#update_plugin_button");
     
-    // 始终显示当前版本
-    if (currentVersionElement.length > 0) {
+    // 只有获取到版本信息才显示
+    if (currentVersionElement.length > 0 && localVersion) {
         currentVersionElement.text(`v${localVersion}`);
     }
     
@@ -241,7 +244,15 @@ async function onUpdatePluginClick() {
         // 如果有更新可用，执行更新
         if (hasUpdate) {
             toastr.info("正在更新插件...", "更新插件");
-            await updateExtension(`${extensionName}`, false);
+            const updateSuccess = await updateExtension(`${extensionName}`, false);
+            
+            if (updateSuccess) {
+                // 更新成功，2秒后自动刷新页面
+                setTimeout(() => {
+                    location.reload();
+                }, 2000);
+                return; // 不需要恢复按钮状态，因为要刷新页面了
+            }
         } else {
             // 没有更新时，重新检查版本
             toastr.info("正在检查最新版本...", "检查更新");
