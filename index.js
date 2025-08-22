@@ -8,11 +8,54 @@ import {
     extension_settings,
     getContext,
     loadExtensionSettings,
+    extensionTypes,
 } from "../../../extensions.js";
 
-import { saveSettingsDebounced } from "../../../../script.js";
+import { saveSettingsDebounced, getRequestHeaders } from "../../../../script.js";
 
-const defaultSettings = { plugin_enabled: true };
+// 获取扩展类型的函数
+function getExtensionType(externalId) {
+    const id = Object.keys(extensionTypes).find(id => id === externalId || (id.startsWith('third-party') && id.endsWith(externalId)));
+    return id ? extensionTypes[id] : '';
+}
+
+// 导入系统的更新函数
+async function updateExtension(extensionName, quiet, timeout = null) {
+    try {
+        const signal = timeout ? AbortSignal.timeout(timeout) : undefined;
+        const response = await fetch('/api/extensions/update', {
+            method: 'POST',
+            signal: signal,
+            headers: getRequestHeaders(),
+            body: JSON.stringify({
+                extensionName,
+                global: getExtensionType(extensionName) === 'global',
+            }),
+        });
+
+        if (!response.ok) {
+            const text = await response.text();
+            toastr.error(text || response.statusText, "扩展更新失败", { timeOut: 5000 });
+            console.error('Extension update failed', response.status, response.statusText, text);
+            return;
+        }
+
+        const data = await response.json();
+
+        if (data.isUpToDate) {
+            if (!quiet) {
+                toastr.success('扩展已是最新版本');
+            }
+        } else {
+            toastr.success(`扩展 ${extensionName} 已更新到 ${data.shortCommitHash}`, "请刷新页面以应用更新");
+        }
+    } catch (error) {
+        console.error('Extension update error:', error);
+        toastr.error('更新失败: ' + error.message, "扩展更新错误");
+    }
+}
+
+const defaultSettings = {};
 
 const extensionName = "Olivia-s-Toolkit";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -84,68 +127,52 @@ async function loadSettings() {
     if (Object.keys(extension_settings[extensionName]).length === 0) {
         Object.assign(extension_settings[extensionName], defaultSettings);
     }
-
-    $("#plugin_enable_switch").prop(
-        "checked",
-        extension_settings[extensionName].plugin_enabled
-    );
-
-    $("#my_button").prop(
-        "disabled",
-        !extension_settings[extensionName].plugin_enabled
-    );
-    $("#example_setting").prop(
-        "disabled",
-        !extension_settings[extensionName].plugin_enabled
-    );
-
-    $("#example_setting").prop(
-        "checked",
-        extension_settings[extensionName].example_setting
-    );
 }
 
-function onExampleInput(event) {
-    const value = Boolean($(event.target).prop("checked"));
-    extension_settings[extensionName].example_setting = value;
-    saveSettingsDebounced();
-}
-
-function onButtonClick() {
-    toastr.info(
-        `The checkbox is ${
-            extension_settings[extensionName].example_setting
-                ? "checked"
-                : "not checked"
-        }`,
-        "A popup appeared because you clicked the button!"
-    );
-}
-
-let pluginEnableSwitchInitialized = false;
-
-function onPluginEnableSwitch(event) {
-    const enabled = Boolean($(event.target).prop("checked"));
-    extension_settings[extensionName].plugin_enabled = enabled;
-    saveSettingsDebounced?.();
-
-    $("#my_button").prop("disabled", !enabled);
-    $("#example_setting").prop("disabled", !enabled);
-
-    if (pluginEnableSwitchInitialized) {
-        if (enabled) {
-            toastr.success("本地图片保存功能已开启", "提示");
-        } else {
-            toastr.warning("本地图片保存功能已关闭", "提示");
-        }
+async function onUpdatePluginClick() {
+    const button = $(this);
+    const icon = button.find('i');
+    
+    // 添加加载动画
+    if (icon.length === 0) {
+        button.prepend('<i class="fa-solid fa-spinner fa-spin"></i> ');
+    } else {
+        icon.addClass('fa-spin');
     }
-    pluginEnableSwitchInitialized = true;
+    
+    button.prop('disabled', true);
+    
+    try {
+        toastr.info("正在检查插件更新...", "更新插件");
+        
+        // 调用系统的更新函数，需要使用完整的第三方扩展名称
+        await updateExtension(`${extensionName}`, false);
+        
+    } catch (error) {
+        console.error('Update failed:', error);
+        toastr.error('更新失败: ' + error.message, "更新错误");
+    } finally {
+        // 移除加载动画
+        if (icon.length > 0) {
+            icon.removeClass('fa-spin');
+        } else {
+            button.find('i').remove();
+        }
+        
+        button.prop('disabled', false);
+    }
 }
+
+
 
 jQuery(async () => {
-    $("#plugin_enable_switch").on("input", onPluginEnableSwitch);
-    $("#my_button").on("click", onButtonClick);
-    $("#example_setting").on("input", onExampleInput);
+    // 从HTML文件加载设置界面
+    const settingsHtml = await $.get(`${extensionFolderPath}/index.html`);
+    $("#extensions_settings").append(settingsHtml);
 
+    // 绑定事件监听器
+    $("#update_plugin_button").on("click", onUpdatePluginClick);
+
+    // 加载设置
     loadSettings();
 });
