@@ -58,7 +58,7 @@ async function updateExtension(extensionName, quiet, timeout = null) {
 const defaultSettings = {};
 
 const extensionName = "Olivia-s-Toolkit";
-const extensionFolderPath = `extensions/third-party/${extensionName}`;
+const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 
 // GitHub仓库信息
 const GITHUB_REPO = "Liu-fucheng/Olivia-s-Toolkit";
@@ -138,7 +138,7 @@ async function loadLocalVersion() {
         if (response.ok) {
             const manifest = await response.json();
             localVersion = manifest.version || "未知";
-            console.log(`橄榄工具箱本地版本: ${localVersion}`);
+            console.log(`橄榄百宝箱本地版本: ${localVersion}`);
             updateVersionDisplay(); // 立即更新显示
         }
     } catch (error) {
@@ -155,7 +155,7 @@ async function loadRemoteVersion() {
         if (response.ok) {
             const manifest = await response.json();
             remoteVersion = manifest.version || "未知";
-            console.log(`橄榄工具箱远程版本: ${remoteVersion}`);
+            console.log(`橄榄百宝箱远程版本: ${remoteVersion}`);
             checkForUpdates();
         }
     } catch (error) {
