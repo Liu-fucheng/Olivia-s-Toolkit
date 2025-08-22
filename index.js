@@ -22,6 +22,11 @@ window.extension_settings[extensionName] =
     window.extension_settings[extensionName] || {};
 const extensionSettings = window.extension_settings[extensionName];
 
+/**
+ * 插件提供的图片上传函数
+ * @param {File} file 图片文件对象
+ * @returns {Promise<{url: string}>} 返回包含图片URL的对象
+ */
 window.__uploadImageByPlugin = async function (file) {
     if (!file || typeof file !== "object" || !file.type.startsWith("image/")) {
         throw new Error("请选择图片文件！");
@@ -44,6 +49,35 @@ window.__uploadImageByPlugin = async function (file) {
 
     return { url: imageUrl };
 };
+
+/**
+ * 插件提供的音频上传函数
+ * @param {File} file 音频文件对象
+ * @returns {Promise<{url: string}>} 返回包含音频URL的对象
+ */
+window.__uploadFileByPlugin = async function (file) {
+    if (!file || typeof file !== "object" || !file.type.startsWith("audio/")) {
+        throw new Error("请选择一个音频文件！");
+    }
+    const fileBase64 = await getBase64Async(file);
+    const base64Data = fileBase64.split(",")[1];
+    const extension = file.type.split("/")[1] || "mp3";
+    const fileNamePrefix = `${Date.now()}_${getStringHash(file.name)}`;
+    const ctx = window.SillyTavern.getContext();
+    const currentCharacterId = ctx.characterId;
+    const characters = await ctx.characters;
+    const character = characters[currentCharacterId];
+    const characterName = character["name"];
+    const fileUrl = await saveBase64AsFile(
+        base64Data,
+        characterName,
+        fileNamePrefix,
+        extension
+    );
+
+    return { url: fileUrl };
+};
+// =======================================================================
 
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
