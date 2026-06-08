@@ -567,6 +567,10 @@ async function onSaveBackendPrefixClick() {
 async function loadSettings() {
     const settings = getToolkitSettings();
 
+    // 在应用默认值之前先记录哪些 key 用户已明确保存过
+    const explicitKeyboardFix = settings.enableKeyboardFix;
+    const explicitSplashHide = settings.enableSplashHide;
+
     for (const [key, value] of Object.entries(defaultSettings)) {
         if (settings[key] === undefined) {
             settings[key] = value;
@@ -578,11 +582,12 @@ async function loadSettings() {
     settings.enableKeyboardFix = Boolean(settings.enableKeyboardFix);
     settings.enableSplashHide = Boolean(settings.enableSplashHide);
 
-    // 将开关状态同步到 localStorage，供下次早期初始化使用
-    saveLocalPrefs({
-        enableKeyboardFix: settings.enableKeyboardFix,
-        enableSplashHide: settings.enableSplashHide,
-    });
+    // 仅当用户已明确保存过该设置时才同步到 localStorage
+    // 避免用默认值覆盖用户刚刚在 localStorage 写入的偏好（如刷新前来不及 debounce 写盘）
+    const lsPrefs = {};
+    if (explicitKeyboardFix !== undefined) lsPrefs.enableKeyboardFix = settings.enableKeyboardFix;
+    if (explicitSplashHide !== undefined) lsPrefs.enableSplashHide = settings.enableSplashHide;
+    if (Object.keys(lsPrefs).length > 0) saveLocalPrefs(lsPrefs);
 
     // 渲染 checkbox 状态
     $('#olivia_keyboard_fix_enabled').prop('checked', settings.enableKeyboardFix);
@@ -665,6 +670,7 @@ function initKeyboardLagFix() {
     const keyboardInsetVar = '--olivia-keyboard-inset';
     let lastInset = -1;
     let rafId = 0;
+    let settleTimer = 0;  // 键盘停稳后的最终吸附定时器
 
     const setKeyboardInset = (value) => {
         // 若设置已关闭，立即清零并退出
@@ -697,30 +703,40 @@ function initKeyboardLagFix() {
     };
 
     const syncInsetByViewport = () => {
+        const newInset = readInsetFromViewport();
+        // inset 增大 = 键盘弹出；inset 减小或归零 = 键盘收起
+        const isOpening = newInset > Math.max(0, lastInset);
+
         cancelAnimationFrame(rafId);
-        rafId = requestAnimationFrame(() => {
-            setKeyboardInset(readInsetFromViewport());
-        });
+        clearTimeout(settleTimer);
+        root.classList.add('olivia-keyboard-animating'); // 动画期间禁用 CSS transition
+
+        if (isOpening) {
+            // 键盘弹出：立即应用，不启动停稳计时器，不做平滑动画
+            rafId = requestAnimationFrame(() => setKeyboardInset(newInset));
+            return;
+        }
+
+        // 键盘收起：80ms 停稳后恢复 transition 并做最终吸附（平滑动画）
+        settleTimer = setTimeout(() => {
+            root.classList.remove('olivia-keyboard-animating');
+            rafId = requestAnimationFrame(() => setKeyboardInset(readInsetFromViewport()));
+        }, 80);
+        rafId = requestAnimationFrame(() => setKeyboardInset(newInset));
     };
 
     const settleAfterBlur = () => {
-        requestAnimationFrame(() => {
-            requestAnimationFrame(syncInsetByViewport);
-        });
+        // blur 后兑等一帧，作为 visualViewport 没有及时触发时的保底
+        requestAnimationFrame(syncInsetByViewport);
     };
 
-    // 安卓现代浏览器：启用悬浮键盘，并优先读底层几何数据
+    // overlaysContent = true：键盘弹出时浏览器不缩小视口，让我们自己检测惯性并处理收起平滑动画
     if ('virtualKeyboard' in navigator) {
         try {
             navigator.virtualKeyboard.overlaysContent = true;
-            if (typeof navigator.virtualKeyboard.addEventListener === 'function') {
-                navigator.virtualKeyboard.addEventListener('geometrychange', () => {
-                    setKeyboardInset(navigator.virtualKeyboard.boundingRect?.height || 0);
-                });
-            }
-            console.log('橄榄百宝箱：已启用 VirtualKeyboard API 优化');
+            // 不用 geometrychange，统一走 visualViewport.resize 保持方向检测逻辑一致
         } catch (error) {
-            console.warn('橄榄百宝箱：VirtualKeyboard API 初始化失败，改用 visualViewport', error);
+            console.warn('橄榄百宝箱：VirtualKeyboard overlaysContent 设置失败', error);
         }
     }
 
@@ -729,7 +745,7 @@ function initKeyboardLagFix() {
         window.visualViewport.addEventListener('scroll', syncInsetByViewport, { passive: true });
     }
 
-    document.addEventListener('focusin', syncInsetByViewport, true);
+    // 不监听 focusin，避免点击输入框时触发布局调整
     document.addEventListener('focusout', settleAfterBlur, true);
 
     // 点空白区域时主动 blur，可减少“点屏幕收起”时的体感延迟
@@ -745,7 +761,7 @@ function initKeyboardLagFix() {
     }, { passive: true });
 
     syncInsetByViewport();
-    console.log('橄榄百宝箱：移动端键盘优化已加载');
+    console.log('橄榄百宝箱：移动端键盘优化已加载（弹出立即应用，收起平滑动画）');
 }
 // =======================================================================
 jQuery(async () => {
@@ -790,7 +806,15 @@ jQuery(async () => {
         settings.enableSplashHide = this.checked;
         saveLocalPrefs({ enableSplashHide: this.checked });
         saveSettingsDebounced();
-        toastr.info('开屏优化设置将在下次启动时生效', '已保存');
+
+        if (!this.checked) {
+            // 撤掉本次会话注入的隐藏 CSS，如果开屏元素还在 DOM 里可立即恢复
+            const styleEl = document.getElementById('olivia-hide-splash-branding');
+            if (styleEl) styleEl.remove();
+            toastr.info('已关闭，刷新页面后开屏 Logo 将恢复显示', '已保存');
+        } else {
+            toastr.info('已开启，下次启动时生效', '已保存');
+        }
     });
 
     // 加载设置

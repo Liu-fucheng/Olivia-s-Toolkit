@@ -7,13 +7,17 @@
 /* 键盘弹起时压缩 #sheld 内容区，使 #form_sheld 自动上移至键盘上方
    依赖 border-box：padding 从 height 中扣除而非外扩 */
 #sheld {
-    transition: padding-bottom 0.12s cubic-bezier(0.2, 0, 0, 1);
+    transition: padding-bottom 0.18s cubic-bezier(0, 0, 0.2, 1);
     will-change: padding-bottom;
+}
+
+/* 键盘动画期间禁用 transition，让 JS 每帧直接跟随键盘位置而非追赶 */
+.olivia-keyboard-animating #sheld {
+    transition: none !important;
 }
 
 .olivia-keyboard-visible #sheld {
     padding-bottom: var(--olivia-keyboard-inset) !important;
-    transition-duration: 0.08s;
 }
 
 .olivia-backend-panel {
