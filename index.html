@@ -17,6 +17,55 @@
             </div>
 
             <hr class="sysHR" />
+
+            <div class="olivia-toolkit_block olivia-backend-panel">
+                <div class="olivia-backend-title">前端增强功能</div>
+
+                <label class="checkbox_label" title="监听虚拟键盘变化，在键盘弹出时压缩布局使输入框保持可见（仅移动端触控设备生效）">
+                    <input type="checkbox" id="olivia_keyboard_fix_enabled" />
+                    <span>移动端键盘优化</span>
+                </label>
+
+                <label class="checkbox_label" title="启动时隐藏 SillyTavern 默认的开屏 Logo 和初始化文案">
+                    <input type="checkbox" id="olivia_splash_hide_enabled" />
+                    <span>隐藏默认开屏 Logo <small style="opacity:0.6">（下次启动生效）</small></span>
+                </label>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="olivia-toolkit_block olivia-backend-panel">
+                <div class="olivia-backend-title">可选后端增强（Early Bridge）</div>
+
+                <div class="olivia-backend-prefix-row">
+                    <label for="backend_api_prefix_input">后端 API 前缀</label>
+                    <input
+                        id="backend_api_prefix_input"
+                        class="text_pole"
+                        type="text"
+                        value="/api/plugins/olivia-s-toolkit"
+                        placeholder="/api/plugins/olivia-s-toolkit"
+                    />
+                    <input id="save_backend_api_prefix_button" class="menu_button" type="button" value="保存" />
+                </div>
+
+                <div class="olivia-backend-status-row">
+                    <span>后端状态：<b id="backend_status_text">未检测</b></span>
+                    <span>Bridge：<b id="backend_bridge_status_text">未知</b></span>
+                </div>
+
+                <div class="olivia-toolkit_block flex-container olivia-backend-actions">
+                    <input id="probe_backend_button" class="menu_button" type="button" value="检测后端" />
+                    <input id="backend_install_bridge_button" class="menu_button" type="button" value="安装 Bridge" />
+                    <input id="backend_uninstall_bridge_button" class="menu_button" type="button" value="卸载 Bridge" />
+                </div>
+
+                <div class="olivia-backend-help">
+                    说明：不开后端也能正常使用本插件。启用后端并安装 Bridge 后，可以把启动逻辑提前到更早阶段。
+                </div>
+            </div>
+
+            <hr class="sysHR" />
         </div>
     </div>
 </div>

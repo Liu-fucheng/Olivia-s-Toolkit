@@ -1,0 +1,82 @@
+/* style.css */
+
+:root {
+    --olivia-keyboard-inset: env(keyboard-inset-height, 0px);
+}
+
+/* 键盘弹起时压缩 #sheld 内容区，使 #form_sheld 自动上移至键盘上方
+   依赖 border-box：padding 从 height 中扣除而非外扩 */
+#sheld {
+    transition: padding-bottom 0.12s cubic-bezier(0.2, 0, 0, 1);
+    will-change: padding-bottom;
+}
+
+.olivia-keyboard-visible #sheld {
+    padding-bottom: var(--olivia-keyboard-inset) !important;
+    transition-duration: 0.08s;
+}
+
+.olivia-backend-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.olivia-backend-title {
+    font-size: 14px;
+    font-weight: 700;
+}
+
+.olivia-backend-prefix-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+}
+
+.olivia-backend-prefix-row label {
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.olivia-backend-prefix-row .menu_button {
+    width: fit-content;
+}
+
+.olivia-backend-status-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+}
+
+.olivia-backend-status-row b {
+    font-weight: 700;
+}
+
+#backend_status_text.is-ok,
+#backend_bridge_status_text.is-ok {
+    color: #58c172;
+}
+
+#backend_status_text.is-error,
+#backend_bridge_status_text.is-error {
+    color: #ff6b6b;
+}
+
+#backend_status_text.is-pending,
+#backend_bridge_status_text.is-pending {
+    color: #f5a623;
+}
+
+.olivia-backend-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.olivia-backend-help {
+    font-size: 12px;
+    line-height: 1.45;
+    opacity: 0.86;
+}

@@ -13,6 +13,65 @@ import {
 
 import { saveSettingsDebounced, getRequestHeaders } from "../../../../script.js";
 
+// =======================================================================
+// localStorage 早期偏好（在 extension_settings 加载之前可读）
+// =======================================================================
+const OLIVIA_LS_KEY = 'olivia-toolkit-prefs';
+
+function getLocalPrefs() {
+    try { return JSON.parse(localStorage.getItem(OLIVIA_LS_KEY) || '{}'); } catch { return {}; }
+}
+
+function saveLocalPrefs(patch) {
+    try {
+        const current = getLocalPrefs();
+        localStorage.setItem(OLIVIA_LS_KEY, JSON.stringify({ ...current, ...patch }));
+    } catch {}
+}
+
+// 尽早隐藏并移除启动页 Logo 与初始化文案
+function hideSplashBranding() {
+    const styleId = 'olivia-hide-splash-branding';
+    if (!document.getElementById(styleId)) {
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+.splash-logo,
+.splash-message {
+    display: none !important;
+}
+`;
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    const removeSplashNodes = () => {
+        const splashNodes = document.querySelectorAll('.splash-logo, .splash-message');
+        if (splashNodes.length === 0) return false;
+
+        splashNodes.forEach((node) => node.remove());
+        return true;
+    };
+
+    removeSplashNodes();
+
+    let rafId = 0;
+
+    const observer = new MutationObserver(() => {
+        if (rafId) return;
+        rafId = requestAnimationFrame(() => {
+            rafId = 0;
+            removeSplashNodes();
+        });
+    });
+
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+}
+
+// 读取 localStorage 早期偏好决定是否执行（默认 true，第一次加载时 localStorage 中无值同样执行）
+if (getLocalPrefs().enableSplashHide !== false) {
+    hideSplashBranding();
+}
+
 // 获取扩展类型的函数
 function getExtensionType(externalId) {
     const id = Object.keys(extensionTypes).find(id => id === externalId || (id.startsWith('third-party') && id.endsWith(externalId)));
@@ -58,7 +117,12 @@ async function updateExtension(extensionName, quiet, timeout = null) {
     }
 }
 
-const defaultSettings = {};
+const defaultSettings = {
+    backendApiPrefix: '/api/plugins/olivia-s-toolkit',
+    autoProbeBackend: true,
+    enableKeyboardFix: true,
+    enableSplashHide: true,
+};
 
 const extensionName = "Olivia-s-Toolkit";
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -71,6 +135,12 @@ const GITHUB_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/ma
 let localVersion = "";
 let remoteVersion = "";
 let hasUpdate = false;
+
+const backendState = {
+    available: false,
+    bridgeInstalled: null,
+    probing: false,
+};
 
 window.extension_settings = window.extension_settings || {};
 window.extension_settings[extensionName] =
@@ -220,11 +290,305 @@ function updateVersionDisplay() {
     }
 }
 
-async function loadSettings() {
+function getToolkitSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
-    if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
+    return extension_settings[extensionName];
+}
+
+function normalizeApiPrefix(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return defaultSettings.backendApiPrefix;
+
+    const withLeadingSlash = raw.startsWith('/') ? raw : `/${raw}`;
+    return withLeadingSlash.replace(/\/+$/, '');
+}
+
+function getBackendApiPrefix() {
+    const settings = getToolkitSettings();
+    settings.backendApiPrefix = normalizeApiPrefix(settings.backendApiPrefix);
+    return settings.backendApiPrefix;
+}
+
+function getErrorMessage(error) {
+    const raw = error instanceof Error ? error.message : String(error);
+    const normalized = String(raw || '').trim();
+
+    // Backend routes not mounted often return an HTML 404 page; show a clear hint instead.
+    if (/<!doctype html>|<html|<body|Not found/i.test(normalized)) {
+        return '接口未找到（后端插件可能未加载，请重启 SillyTavern）';
     }
+
+    return normalized;
+}
+
+function setBackendStatus(text, tone = 'idle') {
+    const status = $('#backend_status_text');
+    if (status.length === 0) return;
+
+    status.text(text);
+    status.removeClass('is-ok is-error is-pending');
+
+    if (tone === 'ok') status.addClass('is-ok');
+    if (tone === 'error') status.addClass('is-error');
+    if (tone === 'pending') status.addClass('is-pending');
+}
+
+function setBridgeStatus(text, tone = 'idle') {
+    const status = $('#backend_bridge_status_text');
+    if (status.length === 0) return;
+
+    status.text(text);
+    status.removeClass('is-ok is-error is-pending');
+
+    if (tone === 'ok') status.addClass('is-ok');
+    if (tone === 'error') status.addClass('is-error');
+    if (tone === 'pending') status.addClass('is-pending');
+}
+
+function updateBackendActionButtons() {
+    const installButton = $('#backend_install_bridge_button');
+    const uninstallButton = $('#backend_uninstall_bridge_button');
+
+    const backendReady = backendState.available;
+    installButton.prop('disabled', !backendReady || backendState.bridgeInstalled === true);
+    uninstallButton.prop('disabled', !backendReady || backendState.bridgeInstalled !== true);
+}
+
+function renderBackendSettings() {
+    const settings = getToolkitSettings();
+    $('#backend_api_prefix_input').val(getBackendApiPrefix());
+
+    if (!settings.autoProbeBackend) {
+        setBackendStatus('未检测（自动探测已关闭）');
+    }
+
+    updateBackendActionButtons();
+}
+
+function getBridgeInstallState(payload) {
+    const status = payload?.status ?? payload;
+
+    if (typeof status?.installed === 'boolean') return status.installed;
+    if (typeof status?.enabled === 'boolean') return status.enabled;
+    if (typeof status?.injected === 'boolean') return status.injected;
+    if (typeof status?.present === 'boolean') return status.present;
+
+    return null;
+}
+
+async function callBackendJson(path, body = {}, { timeoutMs = 8000 } = {}) {
+    const apiPrefix = getBackendApiPrefix();
+    const controller = new AbortController();
+    const timeoutId = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+
+    try {
+        const response = await fetch(`${apiPrefix}${path}`, {
+            method: 'POST',
+            headers: getRequestHeaders(),
+            body: JSON.stringify(body),
+            cache: 'no-store',
+            signal: controller.signal,
+        });
+
+        const rawText = await response.text();
+        let data = {};
+
+        if (rawText) {
+            try {
+                data = JSON.parse(rawText);
+            } catch {
+                data = { ok: response.ok, rawText };
+            }
+        }
+
+        if (!response.ok || data?.ok === false) {
+            const errorMessage = data?.error || rawText || response.statusText || `HTTP ${response.status}`;
+            throw new Error(errorMessage);
+        }
+
+        return data;
+    } catch (error) {
+        if (error?.name === 'AbortError') {
+            throw new Error('请求超时，请检查后端插件是否已启用');
+        }
+        throw error;
+    } finally {
+        if (timeoutId) {
+            clearTimeout(timeoutId);
+        }
+    }
+}
+
+async function refreshEarlyBridgeStatus({ silent = false } = {}) {
+    if (!backendState.available) {
+        setBridgeStatus('未知');
+        backendState.bridgeInstalled = null;
+        updateBackendActionButtons();
+        return null;
+    }
+
+    setBridgeStatus('检测中...', 'pending');
+
+    try {
+        const data = await callBackendJson('/early/status', {}, { timeoutMs: 5000 });
+        const installed = getBridgeInstallState(data);
+
+        backendState.bridgeInstalled = installed;
+
+        if (installed === true) {
+            setBridgeStatus('已安装', 'ok');
+        } else if (installed === false) {
+            setBridgeStatus('未安装', 'error');
+        } else {
+            setBridgeStatus('未知');
+        }
+
+        updateBackendActionButtons();
+        return data;
+    } catch (error) {
+        backendState.bridgeInstalled = null;
+        setBridgeStatus('检测失败', 'error');
+        updateBackendActionButtons();
+
+        if (!silent) {
+            toastr.error(`读取 Bridge 状态失败: ${getErrorMessage(error)}`, '后端接口错误');
+        }
+
+        return null;
+    }
+}
+
+async function probeBackend({ silent = false } = {}) {
+    if (backendState.probing) {
+        return backendState.available;
+    }
+
+    backendState.probing = true;
+    setBackendStatus('探测中...', 'pending');
+
+    try {
+        const data = await callBackendJson('/probe', {}, { timeoutMs: 5000 });
+        backendState.available = true;
+
+        const version = data?.version || data?.plugin?.version || data?.data?.version || '';
+        setBackendStatus(version ? `在线 (v${version})` : '在线', 'ok');
+
+        await refreshEarlyBridgeStatus({ silent: true });
+
+        if (!silent) {
+            toastr.success('已检测到后端插件，可启用 Early Bridge');
+        }
+
+        return true;
+    } catch (error) {
+        backendState.available = false;
+        backendState.bridgeInstalled = null;
+
+        setBackendStatus('离线（未检测到）', 'error');
+        setBridgeStatus('未知');
+        updateBackendActionButtons();
+
+        if (!silent) {
+            toastr.info(`后端不可用，当前保持前端模式: ${getErrorMessage(error)}`);
+        }
+
+        return false;
+    } finally {
+        backendState.probing = false;
+    }
+}
+
+async function onProbeBackendClick() {
+    const button = $('#probe_backend_button');
+    const originalText = button.val();
+
+    button.prop('disabled', true).val('检测中...');
+
+    try {
+        await probeBackend({ silent: false });
+    } finally {
+        button.val(originalText);
+        updateBackendActionButtons();
+    }
+}
+
+async function onInstallBridgeClick() {
+    const button = $('#backend_install_bridge_button');
+    const originalText = button.val();
+
+    button.prop('disabled', true).val('安装中...');
+    setBridgeStatus('安装中...', 'pending');
+
+    try {
+        await callBackendJson('/early/install', {}, { timeoutMs: 15000 });
+        await refreshEarlyBridgeStatus({ silent: true });
+        toastr.success('Early Bridge 已安装。建议刷新页面验证首帧效果。', '安装成功');
+    } catch (error) {
+        setBridgeStatus('安装失败', 'error');
+        toastr.error(`Bridge 安装失败: ${getErrorMessage(error)}`, '后端接口错误');
+    } finally {
+        button.val(originalText);
+        updateBackendActionButtons();
+    }
+}
+
+async function onUninstallBridgeClick() {
+    const button = $('#backend_uninstall_bridge_button');
+    const originalText = button.val();
+
+    button.prop('disabled', true).val('卸载中...');
+    setBridgeStatus('卸载中...', 'pending');
+
+    try {
+        await callBackendJson('/early/uninstall', {}, { timeoutMs: 15000 });
+        await refreshEarlyBridgeStatus({ silent: true });
+        toastr.success('Early Bridge 已卸载。建议刷新页面确认恢复。', '卸载成功');
+    } catch (error) {
+        setBridgeStatus('卸载失败', 'error');
+        toastr.error(`Bridge 卸载失败: ${getErrorMessage(error)}`, '后端接口错误');
+    } finally {
+        button.val(originalText);
+        updateBackendActionButtons();
+    }
+}
+
+async function onSaveBackendPrefixClick() {
+    const input = $('#backend_api_prefix_input');
+    const settings = getToolkitSettings();
+
+    settings.backendApiPrefix = normalizeApiPrefix(input.val());
+    input.val(settings.backendApiPrefix);
+    saveSettingsDebounced();
+
+    toastr.success('后端 API 前缀已保存');
+    await probeBackend({ silent: true });
+}
+
+async function loadSettings() {
+    const settings = getToolkitSettings();
+
+    for (const [key, value] of Object.entries(defaultSettings)) {
+        if (settings[key] === undefined) {
+            settings[key] = value;
+        }
+    }
+
+    settings.backendApiPrefix = normalizeApiPrefix(settings.backendApiPrefix);
+    settings.autoProbeBackend = Boolean(settings.autoProbeBackend);
+    settings.enableKeyboardFix = Boolean(settings.enableKeyboardFix);
+    settings.enableSplashHide = Boolean(settings.enableSplashHide);
+
+    // 将开关状态同步到 localStorage，供下次早期初始化使用
+    saveLocalPrefs({
+        enableKeyboardFix: settings.enableKeyboardFix,
+        enableSplashHide: settings.enableSplashHide,
+    });
+
+    // 渲染 checkbox 状态
+    $('#olivia_keyboard_fix_enabled').prop('checked', settings.enableKeyboardFix);
+    $('#olivia_splash_hide_enabled').prop('checked', settings.enableSplashHide);
+
+    renderBackendSettings();
 }
 
 async function onUpdatePluginClick() {
@@ -280,8 +644,110 @@ async function onUpdatePluginClick() {
     }
 }
 
+// =======================================================================
+// --- V4 键盘优化：仅更新 CSS 变量，避免全局重排 ---
+let _keyboardFixInitialized = false;
 
+function resetKeyboardFix() {
+    const root = document.documentElement;
+    root.style.removeProperty('--olivia-keyboard-inset');
+    root.classList.remove('olivia-keyboard-visible');
+}
 
+function initKeyboardLagFix() {
+    if (_keyboardFixInitialized) return; // 幂等，避免重复注册监听器
+    const isTouchLike = window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window;
+    if (!isTouchLike) return;
+
+    _keyboardFixInitialized = true;
+
+    const root = document.documentElement;
+    const keyboardInsetVar = '--olivia-keyboard-inset';
+    let lastInset = -1;
+    let rafId = 0;
+
+    const setKeyboardInset = (value) => {
+        // 若设置已关闭，立即清零并退出
+        if (!getToolkitSettings().enableKeyboardFix) {
+            if (lastInset !== 0) {
+                lastInset = 0;
+                root.style.removeProperty(keyboardInsetVar);
+                root.classList.remove('olivia-keyboard-visible');
+            }
+            return;
+        }
+
+        const inset = Math.max(0, Math.round(value));
+        if (inset === lastInset) return;
+
+        lastInset = inset;
+        if (inset > 0) {
+            root.style.setProperty(keyboardInsetVar, `${inset}px`);
+        } else {
+            root.style.removeProperty(keyboardInsetVar);
+        }
+        root.classList.toggle('olivia-keyboard-visible', inset > 0);
+    };
+
+    const readInsetFromViewport = () => {
+        if (!window.visualViewport) return 0;
+        const viewport = window.visualViewport;
+        const overlap = window.innerHeight - (viewport.height + viewport.offsetTop);
+        return overlap > 0 ? overlap : 0;
+    };
+
+    const syncInsetByViewport = () => {
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+            setKeyboardInset(readInsetFromViewport());
+        });
+    };
+
+    const settleAfterBlur = () => {
+        requestAnimationFrame(() => {
+            requestAnimationFrame(syncInsetByViewport);
+        });
+    };
+
+    // 安卓现代浏览器：启用悬浮键盘，并优先读底层几何数据
+    if ('virtualKeyboard' in navigator) {
+        try {
+            navigator.virtualKeyboard.overlaysContent = true;
+            if (typeof navigator.virtualKeyboard.addEventListener === 'function') {
+                navigator.virtualKeyboard.addEventListener('geometrychange', () => {
+                    setKeyboardInset(navigator.virtualKeyboard.boundingRect?.height || 0);
+                });
+            }
+            console.log('橄榄百宝箱：已启用 VirtualKeyboard API 优化');
+        } catch (error) {
+            console.warn('橄榄百宝箱：VirtualKeyboard API 初始化失败，改用 visualViewport', error);
+        }
+    }
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', syncInsetByViewport, { passive: true });
+        window.visualViewport.addEventListener('scroll', syncInsetByViewport, { passive: true });
+    }
+
+    document.addEventListener('focusin', syncInsetByViewport, true);
+    document.addEventListener('focusout', settleAfterBlur, true);
+
+    // 点空白区域时主动 blur，可减少“点屏幕收起”时的体感延迟
+    document.addEventListener('pointerdown', (event) => {
+        const activeElement = document.activeElement;
+        if (!(activeElement instanceof HTMLElement)) return;
+        if (!activeElement.matches('input, textarea, [contenteditable=""], [contenteditable="true"]')) return;
+
+        const target = event.target instanceof Element ? event.target : null;
+        if (target?.closest('input, textarea, [contenteditable=""], [contenteditable="true"]')) return;
+
+        activeElement.blur();
+    }, { passive: true });
+
+    syncInsetByViewport();
+    console.log('橄榄百宝箱：移动端键盘优化已加载');
+}
+// =======================================================================
 jQuery(async () => {
     // 从HTML文件加载设置界面
     const settingsHtml = await $.get(`${extensionFolderPath}/index.html`);
@@ -289,9 +755,57 @@ jQuery(async () => {
 
     // 绑定事件监听器
     $("#update_plugin_button").on("click", onUpdatePluginClick);
+    $('#probe_backend_button').on('click', onProbeBackendClick);
+    $('#backend_install_bridge_button').on('click', onInstallBridgeClick);
+    $('#backend_uninstall_bridge_button').on('click', onUninstallBridgeClick);
+    $('#save_backend_api_prefix_button').on('click', onSaveBackendPrefixClick);
+
+    $('#backend_api_prefix_input').on('keydown', (event) => {
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            void onSaveBackendPrefixClick();
+        }
+    });
+
+    // 前端功能开关
+    $('#olivia_keyboard_fix_enabled').on('change', function () {
+        const settings = getToolkitSettings();
+        settings.enableKeyboardFix = this.checked;
+        saveLocalPrefs({ enableKeyboardFix: this.checked });
+        saveSettingsDebounced();
+
+        if (this.checked) {
+            // 重新初始化（若尚未初始化）或触发一次同步
+            if (!_keyboardFixInitialized) {
+                initKeyboardLagFix();
+            }
+        } else {
+            // 立即清除键盘偏移状态
+            resetKeyboardFix();
+        }
+    });
+
+    $('#olivia_splash_hide_enabled').on('change', function () {
+        const settings = getToolkitSettings();
+        settings.enableSplashHide = this.checked;
+        saveLocalPrefs({ enableSplashHide: this.checked });
+        saveSettingsDebounced();
+        toastr.info('开屏优化设置将在下次启动时生效', '已保存');
+    });
 
     // 加载设置
-    loadSettings();
+    await loadSettings();
+
+    // 键盘优化：在 loadSettings 之后按设置决定是否启用
+    if (getToolkitSettings().enableKeyboardFix) {
+        initKeyboardLagFix();
+    }
+
+    if (getToolkitSettings().autoProbeBackend) {
+        setTimeout(() => {
+            void probeBackend({ silent: true });
+        }, 250);
+    }
     
     // 加载版本信息
     await loadLocalVersion();
